@@ -1,0 +1,102 @@
+version: 2
+service-name: &service_name web
+workspace-name: &working_directory /tmp/workspace
+machine:
+  timezone: Europe/Berlin
+jobs:
+  test:
+    working_directory: *working_directory
+    environment:
+      SERVICE_NAME: *service_name
+    machine:
+      docker_layer_caching: true
+    steps:
+    - checkout
+    - run: 
+        name: Build image
+        command: docker build -f Dockerfile.dev -t $SERVICE_NAME:test-$CIRCLE_SHA1 .
+    - run:
+        name: Run linting
+        command: docker run $SERVICE_NAME:test-$CIRCLE_SHA1 npm run lint
+    - run:
+        name: Run tests
+        command: docker run $SERVICE_NAME:test-$CIRCLE_SHA1 npm run test -- --runInBand
+    - run:
+        name: Attempt JS build
+        command: docker run $SERVICE_NAME:test-$CIRCLE_SHA1 npm run build
+
+  push-to-ecr:
+    working_directory: *working_directory
+    environment:
+      SERVICE_NAME: *service_name
+    docker:
+    - image: docker:latest
+    steps:
+    - checkout
+    - setup_remote_docker
+    - run:
+        name: Install AWS CLI
+        command: |
+          apk add -U --no-cache curl python py-pip
+          pip install -q --no-cache-dir awscli
+    - run:
+        name: Build and Publish Docker Image
+        command: |
+          docker build -t $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1 .
+          docker tag $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1 $DOCKER_REGISTRY_URL/$SERVICE_NAME:latest
+          echo $(aws ecr get-authorization-token --region eu-central-1 --output text --query 'authorizationData[].authorizationToken' | base64 -d | cut -d: -f2) | docker login -u AWS $DOCKER_REGISTRY_URL --password-stdin
+          docker push $DOCKER_REGISTRY_URL/$SERVICE_NAME:latest
+          docker push $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1
+    - persist_to_workspace:
+        root: ./
+        paths:
+          - k8s-*.yml
+
+  deploy-to-k8s: &deploy-to-k8s
+    docker:
+    - image: venturefalcon/kubectl:latest
+    steps:
+    - attach_workspace:
+        at: *working_directory
+    - run:
+        name: Template k8s config
+        command: for i in $WORKING_DIRECTORY/k8s-*.yml; do envsubst < "$i" > $(basename "$i"); done
+    - run:
+        name: Deploy
+        command: |
+          kubectl config set-context $K8S_CLUSTER --cluster=$K8S_CLUSTER
+          kubectl --context=$K8S_CLUSTER --token=$K8S_TOKEN --server=https://api.$K8S_CLUSTER --insecure-skip-tls-verify apply -R -f ./
+          kubectl rollout status --context=$K8S_CLUSTER --token=$K8S_TOKEN --server=https://api.$K8S_CLUSTER --insecure-skip-tls-verify deployment/$SERVICE_NAME
+
+  deploy-to-staging:
+    environment:
+      SERVICE_NAME: *service_name
+      WORKING_DIRECTORY: *working_directory
+    <<: *deploy-to-k8s
+
+  deploy-to-prod:
+    environment:
+      SERVICE_NAME: *service_name
+      WORKING_DIRECTORY: *working_directory
+    <<: *deploy-to-k8s
+
+
+workflows:
+  version: 2
+  build-and-deploy:
+    jobs:
+    - test
+    - push-to-ecr:
+        requires:
+        - test
+        context: aws
+        filters:
+          branches:
+            only: master
+    - deploy-to-prod:
+        requires:
+        - push-to-ecr
+        context: k8s-prod
+        filters:
+          branches:
+            only: master
