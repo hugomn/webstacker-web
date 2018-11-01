@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    commit: $CIRCLE_SHA1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      run: web
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 300
+  template:
+    metadata:
+      annotations:
+        ad.datadoghq.com/web.logs: '[{"source":"node","service":"web"}]'
+      labels:
+        run: web
+        commit: $CIRCLE_SHA1
+    spec:
+      containers:
+      - name: web
+        image: $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1
+        env:
+        - name: NODE_ENV
+          value: "production"
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3
