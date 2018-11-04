@@ -44,7 +44,7 @@ jobs:
         command: |
           docker build -t $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1 .
           docker tag $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1 $DOCKER_REGISTRY_URL/$SERVICE_NAME:latest
-          echo $(aws ecr get-authorization-token --region eu-central-1 --output text --query 'authorizationData[].authorizationToken' | base64 -d | cut -d: -f2) | docker login -u AWS $DOCKER_REGISTRY_URL --password-stdin
+          echo $(aws ecr get-authorization-token --region us-east-1 --output text --query 'authorizationData[].authorizationToken' | base64 -d | cut -d: -f2) | docker login -u AWS $DOCKER_REGISTRY_URL --password-stdin
           docker push $DOCKER_REGISTRY_URL/$SERVICE_NAME:latest
           docker push $DOCKER_REGISTRY_URL/$SERVICE_NAME:prod-$CIRCLE_SHA1
     - persist_to_workspace:
